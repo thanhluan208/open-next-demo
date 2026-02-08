@@ -6,6 +6,8 @@ import * as origins from "aws-cdk-lib/aws-cloudfront-origins";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import * as iam from "aws-cdk-lib/aws-iam";
+import * as sqs from "aws-cdk-lib/aws-sqs";
+import * as lambdaEventSources from "aws-cdk-lib/aws-lambda-event-sources";
 import { Construct } from "constructs";
 import * as path from "path";
 
@@ -49,6 +51,12 @@ export class OpenNextStack extends cdk.Stack {
       projectionType: dynamodb.ProjectionType.ALL,
     });
 
+    const revalidationQueue = new sqs.Queue(this, "RevalidationQueue", {
+      visibilityTimeout: cdk.Duration.seconds(30),
+      receiveMessageWaitTime: cdk.Duration.seconds(20),
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
     // Server Lambda function
     const serverFunction = new lambda.Function(this, "ServerFunction", {
       runtime: lambda.Runtime.NODEJS_20_X,
@@ -63,13 +71,17 @@ export class OpenNextStack extends cdk.Stack {
       timeout: cdk.Duration.seconds(30),
       environment: {
         CACHE_BUCKET_NAME: cacheBucket.bucketName,
+        CACHE_BUCKET_REGION: this.region,
         CACHE_DYNAMO_TABLE: cacheTable.tableName,
+        REVALIDATION_QUEUE_URL: revalidationQueue.queueUrl,
+        REVALIDATION_QUEUE_REGION: this.region,
       },
     });
 
     // Grant permissions
     cacheBucket.grantReadWrite(serverFunction);
     cacheTable.grantReadWriteData(serverFunction);
+    revalidationQueue.grantSendMessages(serverFunction);
 
     // Allow querying the revalidate index
     serverFunction.addToRolePolicy(
@@ -98,6 +110,8 @@ export class OpenNextStack extends cdk.Stack {
       timeout: cdk.Duration.seconds(30),
       environment: {
         BUCKET_NAME: assetsBucket.bucketName,
+        CACHE_BUCKET_NAME: assetsBucket.bucketName,
+        CACHE_BUCKET_REGION: this.region,
       },
     });
 
@@ -126,17 +140,23 @@ export class OpenNextStack extends cdk.Stack {
         timeout: cdk.Duration.seconds(30),
         environment: {
           CACHE_DYNAMO_TABLE: cacheTable.tableName,
+          CACHE_BUCKET_NAME: cacheBucket.bucketName,
+          CACHE_BUCKET_REGION: this.region,
+          REVALIDATION_QUEUE_URL: revalidationQueue.queueUrl,
+          REVALIDATION_QUEUE_REGION: this.region,
         },
       },
     );
 
-    // Grant permissions
+    cacheBucket.grantReadWrite(revalidationFunction);
     cacheTable.grantReadWriteData(revalidationFunction);
+    revalidationQueue.grantConsumeMessages(revalidationFunction);
 
-    // Create Function URL
-    const revalidationFunctionUrl = revalidationFunction.addFunctionUrl({
-      authType: lambda.FunctionUrlAuthType.NONE,
-    });
+    revalidationFunction.addEventSource(
+      new lambdaEventSources.SqsEventSource(revalidationQueue, {
+        batchSize: 5,
+      }),
+    );
 
     // Deploy static assets to S3
     new s3deploy.BucketDeployment(this, "DeployAssets", {
@@ -300,6 +320,11 @@ export class OpenNextStack extends cdk.Stack {
     new cdk.CfnOutput(this, "CacheTableName", {
       value: cacheTable.tableName,
       description: "DynamoDB Cache Table Name",
+    });
+
+    new cdk.CfnOutput(this, "RevalidationQueueUrl", {
+      value: revalidationQueue.queueUrl,
+      description: "SQS Revalidation Queue URL",
     });
   }
 }
