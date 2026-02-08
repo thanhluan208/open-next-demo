@@ -3,8 +3,8 @@ import CodeBlock from "@/components/CodeBlock";
 import Link from "next/link";
 import ISRControl from "./isr-control";
 
-export const dynamic = "force-static";
-export const revalidate = false; // On-demand revalidation only
+// For pure on-demand ISR: no automatic revalidation, only manual via API
+export const revalidate = false;
 
 // This function runs at build time AND when the page is revalidated
 async function getPageData() {
