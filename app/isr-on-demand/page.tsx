@@ -4,18 +4,30 @@ import Link from "next/link";
 import ISRControl from "./isr-control";
 
 export const dynamic = "force-static";
+export const revalidate = false; // On-demand revalidation only
 
-export default function OnDemandISRPage() {
+// This function runs at build time AND when the page is revalidated
+async function getPageData() {
   const cachedTime = new Date().toISOString();
+  return { cachedTime };
+}
+
+export default async function OnDemandISRPage() {
+  const { cachedTime } = await getPageData();
 
   const pageCode = `// app/isr-on-demand/page.tsx
 export const dynamic = 'force-static';
-export const revalidate = false; // or don't set it at all
+export const revalidate = false; // On-demand only
 
-export default function Page() {
+async function getPageData() {
   const timestamp = new Date().toISOString();
+  return { timestamp };
+}
+
+export default async function Page() {
+  const { timestamp } = await getPageData();
   // This timestamp is generated at build time
-  // or when revalidated
+  // AND when revalidated via revalidatePath()
   return <ClientComponent timestamp={timestamp} />;
 }`;
 

@@ -2,9 +2,9 @@ const config = {
   default: {
     override: {
       wrapper: "aws-lambda",
-      incrementalCache: "s3-lite",
-      tagCache: "dynamodb-lite",
-      queue: "sqs-lite",
+      incrementalCache: "s3",
+      tagCache: "dynamodb",
+      queue: "sqs",
     },
   },
   middleware: {

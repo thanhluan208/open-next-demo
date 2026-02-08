@@ -36,14 +36,21 @@ export class OpenNextStack extends cdk.Stack {
 
     // DynamoDB table for ISR cache
     const cacheTable = new dynamodb.Table(this, "CacheTable", {
-      partitionKey: { name: "path", type: dynamodb.AttributeType.STRING },
-      sortKey: { name: "tag", type: dynamodb.AttributeType.STRING },
+      partitionKey: { name: "tag", type: dynamodb.AttributeType.STRING },
+      sortKey: { name: "path", type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       timeToLiveAttribute: "expireAt",
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
-    // Add GSI for revalidation
+    // CRITICAL: GSI for querying by tag alone (for revalidateTag)
+    cacheTable.addGlobalSecondaryIndex({
+      indexName: "revalidate-tag",
+      partitionKey: { name: "tag", type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // GSI for path-based revalidation queries
     cacheTable.addGlobalSecondaryIndex({
       indexName: "revalidate",
       partitionKey: { name: "path", type: dynamodb.AttributeType.STRING },
@@ -51,6 +58,7 @@ export class OpenNextStack extends cdk.Stack {
       projectionType: dynamodb.ProjectionType.ALL,
     });
 
+    // Standard queue for revalidation (not FIFO)
     const revalidationQueue = new sqs.Queue(this, "RevalidationQueue", {
       visibilityTimeout: cdk.Duration.seconds(30),
       receiveMessageWaitTime: cdk.Duration.seconds(20),
@@ -83,11 +91,14 @@ export class OpenNextStack extends cdk.Stack {
     cacheTable.grantReadWriteData(serverFunction);
     revalidationQueue.grantSendMessages(serverFunction);
 
-    // Allow querying the revalidate index
+    // Allow querying the GSIs
     serverFunction.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ["dynamodb:Query"],
-        resources: [`${cacheTable.tableArn}/index/revalidate`],
+        resources: [
+          `${cacheTable.tableArn}/index/revalidate`,
+          `${cacheTable.tableArn}/index/revalidate-tag`,
+        ],
       }),
     );
 
@@ -148,10 +159,23 @@ export class OpenNextStack extends cdk.Stack {
       },
     );
 
+    // Grant permissions
     cacheBucket.grantReadWrite(revalidationFunction);
     cacheTable.grantReadWriteData(revalidationFunction);
     revalidationQueue.grantConsumeMessages(revalidationFunction);
 
+    // Allow querying the GSIs
+    revalidationFunction.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["dynamodb:Query"],
+        resources: [
+          `${cacheTable.tableArn}/index/revalidate`,
+          `${cacheTable.tableArn}/index/revalidate-tag`,
+        ],
+      }),
+    );
+
+    // Connect SQS to revalidation function
     revalidationFunction.addEventSource(
       new lambdaEventSources.SqsEventSource(revalidationQueue, {
         batchSize: 5,
@@ -244,16 +268,24 @@ export class OpenNextStack extends cdk.Stack {
             ),
         },
 
-        // _next/data for ISR/SSG
+        // _next/data for ISR/SSG - MUST go to server function for revalidation
         "_next/data/*": {
-          origin: s3Origin,
+          origin: new origins.HttpOrigin(
+            cdk.Fn.select(2, cdk.Fn.split("/", serverFunctionUrl.url)),
+          ),
           allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,
           viewerProtocolPolicy:
             cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
           cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+          originRequestPolicy:
+            cloudfront.OriginRequestPolicy.fromOriginRequestPolicyId(
+              this,
+              "DataOriginRequestPolicy",
+              "b689b0a8-53d0-40ab-baf2-68738e2966ac",
+            ),
         },
 
-        // Specific static files - these patterns work better than wildcards
+        // Specific static files
         "*.svg": {
           origin: s3Origin,
           allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,
