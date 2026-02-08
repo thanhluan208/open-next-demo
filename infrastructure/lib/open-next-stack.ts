@@ -56,7 +56,6 @@ export class OpenNextStack extends cdk.Stack {
       code: lambda.Code.fromAsset(
         path.join(__dirname, "../../.open-next/server-functions/default"),
         {
-          // Tell CDK to follow symlinks - this resolves pnpm issues
           followSymlinks: cdk.SymlinkFollowMode.ALWAYS,
         },
       ),
@@ -92,7 +91,6 @@ export class OpenNextStack extends cdk.Stack {
       code: lambda.Code.fromAsset(
         path.join(__dirname, "../../.open-next/image-optimization-function"),
         {
-          // Tell CDK to follow symlinks - this resolves pnpm issues
           followSymlinks: cdk.SymlinkFollowMode.ALWAYS,
         },
       ),
@@ -121,7 +119,6 @@ export class OpenNextStack extends cdk.Stack {
         code: lambda.Code.fromAsset(
           path.join(__dirname, "../../.open-next/revalidation-function"),
           {
-            // Tell CDK to follow symlinks - this resolves pnpm issues
             followSymlinks: cdk.SymlinkFollowMode.ALWAYS,
           },
         ),
@@ -169,6 +166,11 @@ export class OpenNextStack extends cdk.Stack {
     const oai = new cloudfront.OriginAccessIdentity(this, "OAI");
     assetsBucket.grantRead(oai);
 
+    // S3 Origin for static assets
+    const s3Origin = new origins.S3Origin(assetsBucket, {
+      originAccessIdentity: oai,
+    });
+
     // CloudFront distribution
     const distribution = new cloudfront.Distribution(this, "Distribution", {
       defaultBehavior: {
@@ -186,15 +188,16 @@ export class OpenNextStack extends cdk.Stack {
           ),
       },
       additionalBehaviors: {
+        // _next/static files MUST come first (most specific)
         "_next/static/*": {
-          origin: new origins.S3Origin(assetsBucket, {
-            originAccessIdentity: oai,
-          }),
+          origin: s3Origin,
           allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,
           viewerProtocolPolicy:
             cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
           cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
         },
+
+        // _next/image optimization
         "_next/image*": {
           origin: new origins.HttpOrigin(
             cdk.Fn.select(2, cdk.Fn.split("/", imageOptFunctionUrl.url)),
@@ -203,6 +206,7 @@ export class OpenNextStack extends cdk.Stack {
           viewerProtocolPolicy:
             cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
           cachePolicy: new cloudfront.CachePolicy(this, "ImageCachePolicy", {
+            cachePolicyName: `ImageCachePolicy-${this.stackName}`,
             queryStringBehavior: cloudfront.CacheQueryStringBehavior.all(),
             headerBehavior: cloudfront.CacheHeaderBehavior.allowList("Accept"),
             cookieBehavior: cloudfront.CacheCookieBehavior.none(),
@@ -219,14 +223,55 @@ export class OpenNextStack extends cdk.Stack {
               "b689b0a8-53d0-40ab-baf2-68738e2966ac",
             ),
         },
+
+        // _next/data for ISR/SSG
         "_next/data/*": {
-          origin: new origins.S3Origin(assetsBucket, {
-            originAccessIdentity: oai,
-          }),
+          origin: s3Origin,
           allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,
           viewerProtocolPolicy:
             cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
           cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+        },
+
+        // Specific static files - these patterns work better than wildcards
+        "*.svg": {
+          origin: s3Origin,
+          allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,
+          viewerProtocolPolicy:
+            cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+          cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
+        },
+
+        "*.ico": {
+          origin: s3Origin,
+          allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,
+          viewerProtocolPolicy:
+            cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+          cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
+        },
+
+        "*.png": {
+          origin: s3Origin,
+          allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,
+          viewerProtocolPolicy:
+            cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+          cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
+        },
+
+        "*.jpg": {
+          origin: s3Origin,
+          allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,
+          viewerProtocolPolicy:
+            cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+          cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
+        },
+
+        "*.webp": {
+          origin: s3Origin,
+          allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,
+          viewerProtocolPolicy:
+            cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+          cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
         },
       },
     });
@@ -240,6 +285,11 @@ export class OpenNextStack extends cdk.Stack {
     new cdk.CfnOutput(this, "DistributionDomain", {
       value: distribution.distributionDomainName,
       description: "CloudFront Distribution Domain",
+    });
+
+    new cdk.CfnOutput(this, "DistributionId", {
+      value: distribution.distributionId,
+      description: "CloudFront Distribution ID",
     });
 
     new cdk.CfnOutput(this, "AssetsBucketName", {
