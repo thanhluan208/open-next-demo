@@ -1,3 +1,6 @@
+packages:
+  - "infrastructure"
+
 ignoredBuiltDependencies:
   - sharp
   - unrs-resolver
