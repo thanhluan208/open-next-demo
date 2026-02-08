@@ -134,54 +134,6 @@ export class OpenNextStack extends cdk.Stack {
       authType: lambda.FunctionUrlAuthType.NONE,
     });
 
-    // Revalidation Lambda
-    const revalidationFunction = new lambda.Function(
-      this,
-      "RevalidationFunction",
-      {
-        runtime: lambda.Runtime.NODEJS_20_X,
-        handler: "index.handler",
-        code: lambda.Code.fromAsset(
-          path.join(__dirname, "../../.open-next/revalidation-function"),
-          {
-            followSymlinks: cdk.SymlinkFollowMode.ALWAYS,
-          },
-        ),
-        memorySize: 512,
-        timeout: cdk.Duration.seconds(30),
-        environment: {
-          CACHE_DYNAMO_TABLE: cacheTable.tableName,
-          CACHE_BUCKET_NAME: cacheBucket.bucketName,
-          CACHE_BUCKET_REGION: this.region,
-          REVALIDATION_QUEUE_URL: revalidationQueue.queueUrl,
-          REVALIDATION_QUEUE_REGION: this.region,
-        },
-      },
-    );
-
-    // Grant permissions
-    cacheBucket.grantReadWrite(revalidationFunction);
-    cacheTable.grantReadWriteData(revalidationFunction);
-    revalidationQueue.grantConsumeMessages(revalidationFunction);
-
-    // Allow querying the GSIs
-    revalidationFunction.addToRolePolicy(
-      new iam.PolicyStatement({
-        actions: ["dynamodb:Query"],
-        resources: [
-          `${cacheTable.tableArn}/index/revalidate`,
-          `${cacheTable.tableArn}/index/revalidate-tag`,
-        ],
-      }),
-    );
-
-    // Connect SQS to revalidation function
-    revalidationFunction.addEventSource(
-      new lambdaEventSources.SqsEventSource(revalidationQueue, {
-        batchSize: 5,
-      }),
-    );
-
     // Deploy static assets to S3
     new s3deploy.BucketDeployment(this, "DeployAssets", {
       sources: [
@@ -327,6 +279,101 @@ export class OpenNextStack extends cdk.Stack {
         },
       },
     });
+
+    // Revalidation Lambda (created after CloudFront distribution)
+    const revalidationFunction = new lambda.Function(
+      this,
+      "RevalidationFunction",
+      {
+        runtime: lambda.Runtime.NODEJS_20_X,
+        handler: "index.handler",
+        code: lambda.Code.fromAsset(
+          path.join(__dirname, "../../.open-next/revalidation-function"),
+          {
+            followSymlinks: cdk.SymlinkFollowMode.ALWAYS,
+          },
+        ),
+        memorySize: 512,
+        timeout: cdk.Duration.seconds(30),
+        environment: {
+          CACHE_DYNAMO_TABLE: cacheTable.tableName,
+          CACHE_BUCKET_NAME: cacheBucket.bucketName,
+          CACHE_BUCKET_REGION: this.region,
+          REVALIDATION_QUEUE_URL: revalidationQueue.queueUrl,
+          REVALIDATION_QUEUE_REGION: this.region,
+        },
+      },
+    );
+
+    // Grant permissions
+    cacheBucket.grantReadWrite(revalidationFunction);
+    cacheTable.grantReadWriteData(revalidationFunction);
+    revalidationQueue.grantConsumeMessages(revalidationFunction);
+
+    // Allow querying the GSIs
+    revalidationFunction.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["dynamodb:Query"],
+        resources: [
+          `${cacheTable.tableArn}/index/revalidate`,
+          `${cacheTable.tableArn}/index/revalidate-tag`,
+        ],
+      }),
+    );
+
+    // Connect SQS to revalidation function
+    revalidationFunction.addEventSource(
+      new lambdaEventSources.SqsEventSource(revalidationQueue, {
+        batchSize: 5,
+      }),
+    );
+
+    // CloudFront Invalidation Lambda
+    // This function listens to the same SQS queue and invalidates CloudFront cache
+    const cloudfrontInvalidationFunction = new lambda.Function(
+      this,
+      "CloudFrontInvalidationFunction",
+      {
+        runtime: lambda.Runtime.NODEJS_20_X,
+        handler: "index.handler",
+        code: lambda.Code.fromAsset(
+          path.join(__dirname, "../lambda/cloudfront-invalidation"),
+          {
+            bundling: {
+              image: lambda.Runtime.NODEJS_20_X.bundlingImage,
+              command: [
+                "bash",
+                "-c",
+                "npm install --omit=dev && cp -r . /asset-output/",
+              ],
+            },
+          },
+        ),
+        memorySize: 256,
+        timeout: cdk.Duration.seconds(30),
+        environment: {
+          CLOUDFRONT_DISTRIBUTION_ID: distribution.distributionId,
+        },
+      },
+    );
+
+    // Grant CloudFront invalidation permissions
+    cloudfrontInvalidationFunction.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["cloudfront:CreateInvalidation"],
+        resources: [
+          `arn:aws:cloudfront::${this.account}:distribution/${distribution.distributionId}`,
+        ],
+      }),
+    );
+
+    // Connect SQS to CloudFront invalidation function
+    cloudfrontInvalidationFunction.addEventSource(
+      new lambdaEventSources.SqsEventSource(revalidationQueue, {
+        batchSize: 5,
+        reportBatchItemFailures: true,
+      }),
+    );
 
     // Outputs
     new cdk.CfnOutput(this, "DistributionUrl", {

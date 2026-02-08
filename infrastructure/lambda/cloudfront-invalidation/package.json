@@ -1,0 +1,9 @@
+{
+  "name": "cloudfront-invalidation-function",
+  "version": "1.0.0",
+  "description": "Lambda function to invalidate CloudFront cache on ISR revalidation",
+  "main": "index.js",
+  "dependencies": {
+    "@aws-sdk/client-cloudfront": "^3.985.0"
+  }
+}

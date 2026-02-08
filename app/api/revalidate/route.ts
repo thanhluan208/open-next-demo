@@ -1,5 +1,6 @@
 import { revalidatePath } from "next/cache";
 import { NextRequest, NextResponse } from "next/server";
+import { SQSClient, SendMessageCommand } from "@aws-sdk/client-sqs";
 
 export async function POST(request: NextRequest) {
   const timestamp = new Date().toISOString();
@@ -16,6 +17,7 @@ export async function POST(request: NextRequest) {
       CACHE_BUCKET_NAME: process.env.CACHE_BUCKET_NAME,
       CACHE_DYNAMO_TABLE: process.env.CACHE_DYNAMO_TABLE,
       REVALIDATION_QUEUE_URL: process.env.REVALIDATION_QUEUE_URL,
+      REVALIDATION_QUEUE_REGION: process.env.REVALIDATION_QUEUE_REGION,
       NODE_ENV: process.env.NODE_ENV,
     });
 
@@ -30,6 +32,50 @@ export async function POST(request: NextRequest) {
     revalidatePath(path, type);
 
     console.log(`[${timestamp}] revalidatePath completed successfully`);
+
+    // WORKAROUND: Manually send SQS message for Next.js 16 + OpenNext compatibility
+    // In Next.js 16, revalidatePath() doesn't automatically send SQS messages
+    const queueUrl = process.env.REVALIDATION_QUEUE_URL;
+    const queueRegion =
+      process.env.REVALIDATION_QUEUE_REGION || "ap-southeast-1";
+
+    if (queueUrl) {
+      console.log(
+        `[${timestamp}] Manually sending SQS message to queue: ${queueUrl}`,
+      );
+
+      try {
+        const sqsClient = new SQSClient({ region: queueRegion });
+        const host = request.headers.get("host") || "unknown";
+
+        const messageBody = JSON.stringify({
+          host,
+          url: path,
+        });
+
+        const command = new SendMessageCommand({
+          QueueUrl: queueUrl,
+          MessageBody: messageBody,
+        });
+
+        const result = await sqsClient.send(command);
+        console.log(`[${timestamp}] ✅ SQS message sent successfully:`, {
+          messageId: result.MessageId,
+          host,
+          path,
+        });
+      } catch (sqsError) {
+        console.error(
+          `[${timestamp}] ❌ Failed to send SQS message:`,
+          sqsError,
+        );
+        // Don't fail the request if SQS fails, just log it
+      }
+    } else {
+      console.warn(
+        `[${timestamp}] ⚠️  REVALIDATION_QUEUE_URL not set, skipping SQS message`,
+      );
+    }
     console.log(
       `[${timestamp}] ========== REVALIDATION REQUEST END ==========`,
     );
