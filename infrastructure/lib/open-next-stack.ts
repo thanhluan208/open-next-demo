@@ -58,7 +58,6 @@ export class OpenNextStack extends cdk.Stack {
       projectionType: dynamodb.ProjectionType.ALL,
     });
 
-    // Standard queue for revalidation (not FIFO)
     const revalidationQueue = new sqs.Queue(this, "RevalidationQueue", {
       visibilityTimeout: cdk.Duration.seconds(30),
       receiveMessageWaitTime: cdk.Duration.seconds(20),
@@ -167,6 +166,29 @@ export class OpenNextStack extends cdk.Stack {
       originAccessIdentity: oai,
     });
 
+    // Cache Policy for the Server (SSR/ISR)
+    const serverCachePolicy = new cloudfront.CachePolicy(
+      this,
+      "ServerCachePolicy",
+      {
+        queryStringBehavior: cloudfront.CacheQueryStringBehavior.all(),
+        headerBehavior: cloudfront.CacheHeaderBehavior.allowList(
+          "accept",
+          "rsc",
+          "next-router-prefetch",
+          "next-router-state-tree",
+          "next-router-segment-prefetch",
+          "next-url",
+        ),
+        cookieBehavior: cloudfront.CacheCookieBehavior.none(),
+        defaultTtl: cdk.Duration.seconds(0),
+        maxTtl: cdk.Duration.days(365),
+        minTtl: cdk.Duration.seconds(0),
+        enableAcceptEncodingGzip: true,
+        enableAcceptEncodingBrotli: true,
+      },
+    );
+
     // CloudFront distribution
     const distribution = new cloudfront.Distribution(this, "Distribution", {
       defaultBehavior: {
@@ -175,7 +197,7 @@ export class OpenNextStack extends cdk.Stack {
         ),
         allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-        cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+        cachePolicy: serverCachePolicy,
         originRequestPolicy:
           cloudfront.OriginRequestPolicy.fromOriginRequestPolicyId(
             this,
@@ -228,7 +250,7 @@ export class OpenNextStack extends cdk.Stack {
           allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,
           viewerProtocolPolicy:
             cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-          cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+          cachePolicy: serverCachePolicy,
           originRequestPolicy:
             cloudfront.OriginRequestPolicy.fromOriginRequestPolicyId(
               this,
