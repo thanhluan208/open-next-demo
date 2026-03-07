@@ -68,33 +68,6 @@ The `OpenNextStack` defines the following resources to power the Next.js applica
   - **`_next/data/*`**: Routes to `ServerFunction` (Ensures data requests trigger ISR logic).
   - **Static Files (`*.png`, `*.svg`, etc.)**: Route directly to `AssetsBucket`.
 
-### Why `infrastructure/lambda/revalidation-wrapper.js`?
-
-This file includes a `revalidation-wrapper.js` script in the `infrastructure/lambda` directory.
-
-**Crucially, this file is NOT currently connected to `infrastructure/lib/open-next-stack.ts`.**
-
-It is provided as an **architectural pattern**/template to solve a specific challenge with OpenNext on AWS, which the current "multi-lambda" deployment in `open-next-stack.ts` does not fully address.
-
-#### 1. The Problem: Stale Edge Cache
-
-By default, OpenNext's ISR implementation updates the cached files in S3 and metadata in DynamoDB (the "Origin Cache"). However, it **does not** automatically invalidate the CloudFront CDN cache (the "Edge Cache"). This means users might still see stale content served from the edge until the CloudFront TTL expires, even after a successful revalidation.
-
-#### 2. The Challenge: SQS Competition (Current Stack Issue)
-
-The current `open-next-stack.ts` attempts to fix this by attaching a second Lambda (`CloudFrontInvalidationFunction`) to the same revalidation SQS queue.
-However, this introduces a **Race Condition**: SQS standard queues distribute messages to _either_ one consumer or the other, not typically both. This means one Lambda might update the cache (OpenNext) while the other (Invalidation) never sees the message.
-
-#### 3. The `revalidation-wrapper.js` Solution (Recommended Fix)
-
-This script is designed to replace the two separate functions with a single one:
-
-1.  **Wrap** the original OpenNext revalidation handler.
-2.  **Execute** the core revalidation logic (updating S3/DynamoDB).
-3.  **Invalidate** CloudFront immediately after the update succeeds.
-
-**To use this wrapper**, you would need to modify `open-next-stack.ts` to bundle this script as the handler for the `RevalidationFunction` and remove the separate `CloudFrontInvalidationFunction`.
-
 ## Prerequisites
 
 Before deploying, ensure you have the following installed and configured:
@@ -173,6 +146,37 @@ pnpm cdk:destroy
 - **On-Demand ISR**: `app/isr-on-demand/` (Demonstrates revalidation via API)
 - **Edge Runtime**: `app/edge/`
 - **Streaming**: `app/streaming/`
+
+### On-Demand ISR Workaround (`app/api/revalidate/route.ts`)
+
+For On-Demand ISR (`revalidatePath` / `revalidateTag`), the default OpenNext behavior might not correctly trigger the backend revalidation process in all Next.js versions (specifically v15+).
+
+To address this, `app/api/revalidate/route.ts` implements a manual workaround:
+
+1.  **Calls `revalidatePath()`**: Performs the standard Next.js revalidation call.
+2.  **Manually Sends SQS Message**: Explicitly sends a message to the `RevalidationQueue` with the path to be revalidated.
+
+This ensures that the `RevalidationFunction` is reliably triggered to update the cache in S3 and DynamoDB, and subsequently trigger the `CloudFrontInvalidationFunction`.
+
+This requires the `REVALIDATION_QUEUE_URL` environment variable to be available to the server function.
+
+### Potential Issue: Competing Consumers
+
+The current infrastructure configuration in `open-next-stack.ts` sets up a **Standard SQS Queue** (`RevalidationQueue`) with two separate Lambda functions listening to it:
+
+1.  `RevalidationFunction` (Core OpenNext logic)
+2.  `CloudFrontInvalidationFunction` (Custom invalidation logic)
+
+This setup creates a **Competing Consumers** pattern. SQS standard queues typically deliver a message to _one_ of the available consumers, not both.
+
+**The Risk:**
+There is a potential race condition where:
+
+- A revalidation message is picked up by the `RevalidationFunction`, updating the origin cache (S3/DynamoDB), but the `CloudFrontInvalidationFunction` never receives the message.
+- Conversely, the `CloudFrontInvalidationFunction` might pick up the message and invalidate the CDN, but the origin cache remains stale because `RevalidationFunction` never ran.
+
+**Recommended Solution:**
+To reliably solve this, the infrastructure should be updated to use an **SNS Fan-out** pattern (SNS Topic -> Multiple SQS Queues) or a single **Chained Execution** Lambda (handling both revalidation and invalidation sequentially). The `revalidation-wrapper.js` (previously removed) was one such attempt at a chained execution solution.
 
 ## Learn More
 

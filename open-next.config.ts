@@ -10,6 +10,18 @@ const config = {
   middleware: {
     external: true,
   },
+  functions: {
+    time: {
+      runtime: "edge",
+      routes: ["app/api/time/route"],
+      patterns: ["/api/time"],
+    },
+    edgePage: {
+      runtime: "edge",
+      routes: ["app/edge/page"],
+      patterns: ["/edge"],
+    },
+  },
 } as const;
 
 export default config;

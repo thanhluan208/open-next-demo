@@ -64,6 +64,12 @@ export class OpenNextStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
+    const invalidationQueue = new sqs.Queue(this, "InvalidationQueue", {
+      visibilityTimeout: cdk.Duration.seconds(30),
+      receiveMessageWaitTime: cdk.Duration.seconds(20),
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
     // Server Lambda function
     const serverFunction = new lambda.Function(this, "ServerFunction", {
       runtime: lambda.Runtime.NODEJS_20_X,
@@ -82,6 +88,7 @@ export class OpenNextStack extends cdk.Stack {
         CACHE_DYNAMO_TABLE: cacheTable.tableName,
         REVALIDATION_QUEUE_URL: revalidationQueue.queueUrl,
         REVALIDATION_QUEUE_REGION: this.region,
+        WEBHOOK_URL: "", // Will be assigned later after Webhook creation
       },
     });
 
@@ -391,11 +398,39 @@ export class OpenNextStack extends cdk.Stack {
 
     // Connect SQS to CloudFront invalidation function
     cloudfrontInvalidationFunction.addEventSource(
-      new lambdaEventSources.SqsEventSource(revalidationQueue, {
+      new lambdaEventSources.SqsEventSource(invalidationQueue, {
         batchSize: 5,
         reportBatchItemFailures: true,
       }),
     );
+
+    // Webhook Lambda Function for Next.js explicit fetches
+    const webhookFunction = new lambda.Function(this, "WebhookFunction", {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      handler: "index.handler",
+      code: lambda.Code.fromAsset(path.join(__dirname, "../lambda/webhook")),
+      environment: {
+        INVALIDATION_QUEUE_URL: invalidationQueue.queueUrl,
+        CACHE_BUCKET_NAME: cacheBucket.bucketName,
+      },
+      memorySize: 256,
+      timeout: cdk.Duration.seconds(30),
+    });
+
+    invalidationQueue.grantSendMessages(webhookFunction);
+    cacheBucket.grantReadWrite(webhookFunction);
+
+    // Create a public endpoint for the Webhook
+    const webhookFunctionUrl = webhookFunction.addFunctionUrl({
+      authType: lambda.FunctionUrlAuthType.NONE,
+      cors: {
+        allowedOrigins: ["*"],
+        allowedMethods: [lambda.HttpMethod.POST],
+      },
+    });
+
+    // Inject the webhook URL into ServerFunction environment logic
+    serverFunction.addEnvironment("WEBHOOK_URL", webhookFunctionUrl.url);
 
     // Outputs
     new cdk.CfnOutput(this, "DistributionUrl", {
