@@ -1,5 +1,5 @@
 // Edge runtime API route
-export const runtime = "edge";
+// export const runtime = "edge"; // Removed to allow open-next to bundle it in the default function
 
 export async function GET(request: Request) {
   const timestamp = new Date().toISOString();

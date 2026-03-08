@@ -3,7 +3,7 @@ import CodeBlock from "@/components/CodeBlock";
 import Link from "next/link";
 
 // Configure edge runtime
-export const runtime = "edge";
+// export const runtime = "edge"; // Removed to allow open-next to bundle it in the default function
 
 export default async function EdgePage() {
   const requestTime = new Date().toISOString();

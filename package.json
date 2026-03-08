@@ -9,7 +9,7 @@
     "lint": "eslint",
     "open-next": "open-next build",
     "cdk:synth": "cd infrastructure && cdk synth",
-    "cdk:deploy": "cd infrastructure && cdk deploy",
+    "cdk:deploy": "cd infrastructure && cdk deploy --all",
     "cdk:destroy": "cd infrastructure && cdk destroy",
     "deploy": "pnpm open-next && pnpm cdk:deploy"
   },

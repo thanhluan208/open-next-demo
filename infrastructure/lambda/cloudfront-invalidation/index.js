@@ -35,21 +35,28 @@ exports.handler = async (event) => {
           `[CloudFront Invalidation] Found path to invalidate: ${url}`,
         );
 
-        // Add the main path
+        // Add the exact main path (no query strings)
         paths.add(url);
+
+        // Add a wildcard specifically targeting query strings for THIS exact path
+        // e.g., URL "/product" becomes "/product?*" which safely clears "/product?test=1"
+        // but it will NOT accidentally clear "/product-reviews"!
+        // If url is "/", it becomes "/?*" which only clears the homepage query strings, not the whole site.
+        paths.add(`${url}?*`);
 
         // Add the RSC data route for Next.js pages
         if (!url.endsWith(".rsc")) {
           paths.add(`${url}.rsc`);
+          paths.add(`${url}.rsc?*`);
         }
 
-        // Add the _next/data route for client-side navigation
-        // Format: /_next/data/{buildId}/{path}.json
+        // Add the _next/data route for client-js navigation
         if (!url.startsWith("/_next/data/")) {
           const pathWithoutLeadingSlash = url.startsWith("/")
             ? url.slice(1)
             : url;
           paths.add(`/_next/data/*/${pathWithoutLeadingSlash}.json`);
+          paths.add(`/_next/data/*/${pathWithoutLeadingSlash}.json?*`);
         }
       }
     } catch (error) {
